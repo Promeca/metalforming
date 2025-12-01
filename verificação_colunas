@@ -1,0 +1,52 @@
+import pandas as pd
+from pathlib import Path
+import sys
+
+# --- CONFIGURAÇÃO: NOME E CAMINHO DO SEU ARQUIVO ---
+CAMINHO_ARQUIVO = Path('M:\\NTA2\\LMD\\Evento Lean\\Dados e Documentos Gerais JBMC1\\vs_code\\testes\\apontamentos.csv') 
+COLUNA_ITEM_ESPERADA = 'NumerodaPeca' 
+
+
+def verificar():
+    print("="*60)
+    print("      PASSO 1: VERIFICAÇÃO DE COLUNAS")
+    print("="*60)
+    print(f"Lendo arquivo em: {CAMINHO_ARQUIVO}...\n")
+
+
+    try:
+        # Tenta ler com Latin-1 e ';'
+        try:
+            df = pd.read_csv(CAMINHO_ARQUIVO, sep=';', decimal=',', encoding='latin-1', nrows=0)
+            encoding_usado = 'latin-1'
+        except FileNotFoundError:
+            print("❌ ERRO: Arquivo não encontrado.")
+            print("Verifique se o caminho M:\\NTA2\\... está mapeado corretamente no seu novo PC.")
+            sys.exit(1)
+        except Exception as e:
+            # Tenta UTF-8 como fallback
+            df = pd.read_csv(CAMINHO_ARQUIVO, sep=';', decimal=',', encoding='utf-8', nrows=0)
+            encoding_usado = 'utf-8'
+            
+        print(f"✅ Arquivo lido com sucesso usando codificação: {encoding_usado}")
+        
+        df.columns = df.columns.str.strip() # Limpa espaços no cabeçalho
+        colunas_limpas = list(df.columns)
+
+        print("\n--- NOMES DAS COLUNAS ENCONTRADAS NO ARQUIVO ---")
+        print(colunas_limpas)
+        print("--------------------------------------------------")
+        
+        # Verifica a coluna do item especificamente
+        if COLUNA_ITEM_ESPERADA in colunas_limpas:
+            print(f"✅ Coluna de Item '{COLUNA_ITEM_ESPERADA}' encontrada. OK para prosseguir.")
+        else:
+            print(f"❌ Coluna de Item '{COLUNA_ITEM_ESPERADA}' NÃO ENCONTRADA.")
+            print(f"Verifique a grafia exata no seu CSV. Esperado: '{COLUNA_ITEM_ESPERADA}'")
+                
+    except Exception as e:
+        print(f"\n❌ ERRO FATAL: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    verificar()
