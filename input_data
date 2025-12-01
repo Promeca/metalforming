@@ -1,0 +1,135 @@
+import pandas as pd
+from pathlib import Path
+import sys
+
+# --- DEFINIÇÕES DE COLUNAS (NOMES LIMPOS) ---
+COLUNA_MAQUINA = 'Maquina'       
+COLUNA_TURNO_FLAG = 'Turno'      
+# COLUNA DE ITEM CONFIRMADA COM 'Ç'
+COLUNA_ITEM = 'NumerodaPeca'     
+
+# --- NOVO CAMINHO CONFIGURADO PELO USUÁRIO ---
+CAMINHO_ENTRADA = Path('M:\\NTA2\\LMD\\Evento Lean\\Dados e Documentos Gerais JBMC1\\vs_code\\testes\\apontamentos.csv')
+ARQUIVO_SAIDA_HORAS = CAMINHO_ENTRADA.parent / 'horas_planejadas_por_item.csv'
+
+# --- FUNÇÕES AUXILIARES ---
+def get_horas_padrao_por_turno(nome_turno):
+    """Retorna as horas padrão por turno."""
+    t = str(nome_turno).lower()
+    if 'primeiro' in t or '1' in t: return 7.42
+    elif 'segundo' in t or '2' in t: return 7.25
+    elif 'terceiro' in t or '3' in t: return 5.97
+    else: return 8.00
+
+DEFAULT_REV = 0.00
+DEFAULT_EXTRA = 0.00
+
+def obter_horas_como_float(prompt, valor_sugerido):
+    """Lê input do usuário como float, aceitando sugestão por Enter."""
+    sugestao_str = f" [{valor_sugerido:.2f}]" if valor_sugerido is not None else ""
+    while True:
+        try:
+            valor_digitado = input(f"{prompt}{sugestao_str}: ").strip().replace(',', '.')
+            if not valor_digitado and valor_sugerido is not None: return valor_sugerido
+            numero = float(valor_digitado)
+            if numero >= 0: return numero
+            else: print("❌ Valor deve ser positivo.")
+        except ValueError: print("❌ Digite um número válido.")
+
+def coletar_input_loop():
+    print("\n" + "="*80)
+    print("      PASSO 2: COLETA INTERATIVA DE HORAS PLANEJADAS")
+    print("==================================================================================")
+    
+    try:
+        # Leitura com Latin-1 (para suportar o 'Ç' corretamente)
+        df = pd.read_csv(CAMINHO_ENTRADA, sep=';', decimal=',', encoding='latin-1')
+        df.columns = df.columns.str.strip() # Garante que não tem espaços invisíveis
+    except FileNotFoundError:
+        print(f"❌ ERRO: Arquivo não encontrado: {CAMINHO_ENTRADA}"); sys.exit(1)
+    except Exception as e:
+        print(f"❌ ERRO ao ler arquivo: {e}"); sys.exit(1)
+
+    # Verificação de Segurança
+    if COLUNA_ITEM not in df.columns or COLUNA_MAQUINA not in df.columns or COLUNA_TURNO_FLAG not in df.columns:
+        print(f"❌ ERRO: Colunas essenciais (e.g., '{COLUNA_ITEM}') não encontradas. Colunas lidas:")
+        print(list(df.columns))
+        sys.exit(1)
+
+    # Criar chaves únicas
+    chaves_itens = df[[COLUNA_MAQUINA, COLUNA_TURNO_FLAG, COLUNA_ITEM]].drop_duplicates().to_records(index=False)
+    
+    # Carregar dados anteriores
+    dados_anteriores = {}
+    if ARQUIVO_SAIDA_HORAS.exists():
+        try:
+            df_ant = pd.read_csv(ARQUIVO_SAIDA_HORAS, sep=';', decimal=',', encoding='latin-1')
+            for _, row in df_ant.iterrows():
+                # Usa a coluna definida atualmente
+                key = (row[COLUNA_MAQUINA], row[COLUNA_TURNO_FLAG], row[COLUNA_ITEM])
+                dados_anteriores[key] = {
+                    'Horas_Normais': row['Horas_Normais'], 
+                    'Horas_Revezamento': row['Horas_Revezamento'], 
+                    'Horas_Extras': row['Horas_Extras']
+                }
+            print("✅ Dados anteriores carregados. Use ENTER para manter valores salvos.")
+        except: pass
+
+    dados_input = []
+    print(f"\n✅ Encontrados {len(chaves_itens)} registros para processar.\n")
+    
+    ultimo_contexto = None
+
+    for i, (maquina, turno, item) in enumerate(chaves_itens):
+        contexto_atual = (maquina, turno)
+        if contexto_atual != ultimo_contexto:
+            print(f"\n{'-'*20} MÁQUINA: {maquina} | TURNO: {turno} {'-'*20}")
+            ultimo_contexto = contexto_atual
+
+        sugestoes_salvas = dados_anteriores.get((maquina, turno, item), {})
+        
+        # Define as sugestões, priorizando o que foi salvo
+        if sugestoes_salvas:
+            sug_normais = sugestoes_salvas['Horas_Normais']
+            sug_revez = sugestoes_salvas['Horas_Revezamento']
+            sug_extras = sugestoes_salvas['Horas_Extras']
+        else:
+            sug_normais = get_horas_padrao_por_turno(turno)
+            sug_revez = DEFAULT_REV
+            sug_extras = DEFAULT_EXTRA
+
+        print(f"\n📝 Item: {item}")
+
+        # PERGUNTA PRINCIPAL: RODOU?
+        rodou = input(f"   > Este item rodou? [S/n, ENTER=S]: ").strip().lower()
+
+        if rodou == 'n':
+            h_normais, h_revez, h_extras = 0.00, 0.00, 0.00
+            print("   -> Definido como 0 horas.")
+        else:
+            while True:
+                h_normais = obter_horas_como_float("   > Horas Normais", sug_normais)
+                h_revez = obter_horas_como_float("   > Horas Revezamento", sug_revez)
+                h_extras = obter_horas_como_float("   > Horas Extras", sug_extras)
+                
+                print(f"   -> Total: {h_normais + h_revez + h_extras:.2f}h")
+                if input("   Confirmar? [ENTER=Sim, c=Corrigir]: ").lower() != 'c': break
+
+        dados_input.append({
+            COLUNA_MAQUINA: maquina,
+            COLUNA_TURNO_FLAG: turno,
+            COLUNA_ITEM: item,
+            'Horas_Normais': h_normais,
+            'Horas_Revezamento': h_revez,
+            'Horas_Extras': h_extras
+        })
+        
+    df_input = pd.DataFrame(dados_input)
+    df_input['Horas_Disponiveis'] = df_input[['Horas_Normais', 'Horas_Revezamento', 'Horas_Extras']].sum(axis=1)
+    df_input.to_csv(ARQUIVO_SAIDA_HORAS, index=False, sep=';', decimal=',')
+    
+    print("\n" + "="*80)
+    print(f"✅ Input salvo com sucesso em: {ARQUIVO_SAIDA_HORAS}")
+    
+if __name__ == "__main__":
+    coletar_input_loop()
