@@ -1,0 +1,162 @@
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import sys
+
+# --- CONFIGURAÇÃO DE CAMINHOS ---
+# Ajuste o caminho da pasta se necessário!
+CAMINHO_BASE = Path('M:\\NTA2\\LMD\\Evento Lean\\Dados e Documentos Gerais JBMC1\\vs_code\\testes')
+CAMINHO_ENTRADA = CAMINHO_BASE / 'apontamentos.csv'
+ARQUIVO_INPUT_HORAS = CAMINHO_BASE / 'horas_planejadas_por_item.csv'
+ARQUIVO_SAIDA = CAMINHO_BASE / 'oee_final_consolidado.csv'
+ARQUIVO_RESUMO = CAMINHO_BASE / 'oee_resumo_maquina.csv'
+
+# --- DEFINIÇÕES DE COLUNAS ---
+C_MAQ = 'Maquina'
+C_TURNO = 'Turno'
+C_ITEM = 'NumerodaPeca' 
+C_TAXA = 'TMAGMAZT' 
+C_PROD = 'QtdeProduzidaBoa'
+
+def validar_colunas(df, nome_arquivo, colunas_esperadas):
+    """Verifica se todas as colunas essenciais estão presentes no DataFrame."""
+    colunas_df = set(df.columns)
+    colunas_para_validar = [col for col in colunas_esperadas if col != C_TAXA]
+
+    faltando = [col for col in colunas_para_validar if col not in colunas_df]
+    
+    if faltando:
+        print(f"\n❌ ERRO DE ESTRUTURA no arquivo: {nome_arquivo}")
+        print(f"   Colunas Essenciais Faltando: {', '.join(faltando)}")
+        print(f"   Colunas encontradas: {list(df.columns)}")
+        print("\n   Dica: Verifique a grafia exata!")
+        sys.exit(1)
+    
+    print(f"✅ Colunas essenciais verificadas no arquivo: {nome_arquivo}")
+
+def calcular():
+    print("\n" + "="*80)
+    print("      PASSO 3: CÁLCULO DO OEE SIMPLIFICADO (PROD/PLANEJADO) - CORREÇÃO DE TM")
+    print("==================================================================================")
+    
+    try:
+        # 1. Leitura e Validação dos dados de apontamento (DF BRUTO)
+        try: 
+            df = pd.read_csv(CAMINHO_ENTRADA, sep=';', decimal=',', encoding='latin-1')
+        except: 
+            df = pd.read_csv(CAMINHO_ENTRADA, sep=';', decimal=',', encoding='utf-8')
+        
+        df.columns = df.columns.str.strip()
+        colunas_brutas_esperadas = [C_MAQ, C_TURNO, C_ITEM, C_TAXA, C_PROD]
+        validar_colunas(df, CAMINHO_ENTRADA.name, colunas_brutas_esperadas)
+        
+        # 2. Leitura e Validação do Input de Horas (DF INPUT)
+        try:
+            df_in = pd.read_csv(ARQUIVO_INPUT_HORAS, sep=';', decimal=',', encoding='latin-1')
+            for c in ['Horas_Disponiveis']:
+                df_in[c] = pd.to_numeric(df_in[c].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
+        except Exception: 
+            print(f"❌ Erro ao ler {ARQUIVO_INPUT_HORAS}. Execute o '2_input_data.py' primeiro.")
+            sys.exit(1)
+        
+        colunas_input_esperadas = [C_MAQ, C_TURNO, C_ITEM, 'Horas_Disponiveis']
+        validar_colunas(df_in, ARQUIVO_INPUT_HORAS.name, colunas_input_esperadas)
+
+        # 3. Limpeza Numérica dos Dados Brutos (CORREÇÃO DE TM AQUI)
+        for col in [C_TAXA, C_PROD]:
+            if col in df.columns:
+                val_str = df[col].astype(str).str.strip()
+                
+                # CORREÇÃO CRÍTICA: Troca a vírgula decimal (,) por ponto (.) para ler como número
+                val_str = val_str.str.replace(',', '.', regex=False)
+                
+                # Se ainda houver ponto, remove (se for um separador de milhar)
+                # Esta linha é o que vamos remover para ver se resolve o problema de escala do TMAGMAZT
+                # val_str = val_str.str.replace('.', '', regex=False)
+                
+                df[col] = pd.to_numeric(val_str, errors='coerce').fillna(0)
+
+        # 4. Cálculo da Taxa Nominal (Pç/H)
+        # FÓRMULA SIMPLIFICADA: 3600 / ((TM / 100) * 60)  =>  6000 / TM
+        if C_TAXA in df.columns:
+            mask = df[C_TAXA] > 0
+            df['Taxa_Nominal_PH'] = np.where(mask, 6000 / df[C_TAXA], 0)
+        else:
+            df['Taxa_Nominal_PH'] = 0.0
+
+        # 5. Agregação por Chave (Máquina, Turno, Item)
+        # Agrega a Taxa Nominal como média
+        agg = {'Taxa_Nominal_PH': 'mean', C_PROD: 'sum'}
+        df_agg = df.groupby([C_MAQ, C_TURNO, C_ITEM]).agg(agg).reset_index()
+
+        # 6. Merge com Horas Disponíveis (Input)
+        final = pd.merge(df_agg, df_in, on=[C_MAQ, C_TURNO, C_ITEM], how='left')
+        final['Horas_Disponiveis'] = final['Horas_Disponiveis'].fillna(0)
+
+        # 7. CÁLCULO DO OEE SIMPLIFICADO POR ITEM
+        
+        # Produção Planejada Total = Taxa Nominal (Pç/H) * Horas Disponíveis (Input)
+        final['Prod_Planejada_Total'] = final['Taxa_Nominal_PH'] * final['Horas_Disponiveis']
+        
+        # OEE = QtdeProduzidaBoa / Prod_Planejada_Total
+        oee_raw = np.divide(
+            final[C_PROD], 
+            final['Prod_Planejada_Total'], 
+            out=np.zeros_like(final[C_PROD], dtype=float),
+            where=final['Prod_Planejada_Total'] > 0
+        )
+        final['OEE_Simplificado'] = np.clip(oee_raw, 0, 1.5) 
+
+        # 8. CÁLCULO DO OEE PONDERADO POR MÁQUINA
+        df_maquina = final.groupby(C_MAQ).agg({
+            'Horas_Disponiveis': 'sum',
+            C_PROD: 'sum',
+            'Prod_Planejada_Total': 'sum'
+        }).reset_index()
+        
+        oee_maq_raw = np.divide(
+            df_maquina[C_PROD],
+            df_maquina['Prod_Planejada_Total'],
+            out=np.zeros_like(df_maquina[C_PROD], dtype=float),
+            where=df_maquina['Prod_Planejada_Total'] > 0
+        )
+        df_maquina['OEE_Maquina'] = np.clip(oee_maq_raw, 0, 1.5)
+
+        # 9. Formatação e Salvamento
+        
+        # Formatação BR
+        final['Taxa_Nominal_PH'] = final['Taxa_Nominal_PH'].round(2).astype(str).str.replace('.', ',')
+        final['Prod_Planejada_Total'] = final['Prod_Planejada_Total'].round(0).astype(int).astype(str).str.replace('.', ',')
+        
+        # OEE Detalhado
+        final['OEE_Simplificado_%'] = (final['OEE_Simplificado'] * 100).round(1).astype(str).str.replace('.', ',') + '%'
+        
+        cols_detalhado = [
+            C_MAQ, C_TURNO, C_ITEM, 'Taxa_Nominal_PH', C_PROD, 
+            'Horas_Disponiveis', 'Prod_Planejada_Total', 'OEE_Simplificado_%'
+        ]
+        
+        final[cols_detalhado].to_csv(ARQUIVO_SAIDA, index=False, sep=';', decimal=',')
+        print(f"✅ RELATÓRIO DETALHADO gerado em: {ARQUIVO_SAIDA}")
+
+        # OEE Resumo
+        df_maquina['Horas_Disponiveis'] = df_maquina['Horas_Disponiveis'].round(2).astype(str).str.replace('.', ',')
+        df_maquina['Prod_Planejada_Total'] = df_maquina['Prod_Planejada_Total'].round(0).astype(int).astype(str)
+        df_maquina[C_PROD] = df_maquina[C_PROD].round(0).astype(int).astype(str)
+        
+        df_maquina['OEE_Maquina_%'] = (df_maquina['OEE_Maquina'] * 100).round(1).astype(str).str.replace('.', ',') + '%'
+        
+        cols_resumo = [C_MAQ, 'Horas_Disponiveis', 'Prod_Planejada_Total', C_PROD, 'OEE_Maquina_%']
+        df_maquina[cols_resumo].to_csv(ARQUIVO_RESUMO, index=False, sep=';', decimal=',')
+        
+        print(f"✅ RELATÓRIO RESUMO gerado em: {ARQUIVO_RESUMO}")
+        print("\n" + "="*80)
+        print("RESUMO OEE POR MÁQUINA (Top 10):")
+        print(df_maquina[cols_resumo].head(10).to_string(index=False))
+        print("==================================================================================")
+
+    except Exception as e:
+        print(f"❌ ERRO FATAL no cálculo: {e}")
+
+if __name__ == "__main__":
+    calcular()
