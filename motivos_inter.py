@@ -22,7 +22,7 @@ df = df.with_columns(
 )
 
 # 4. Salvando o resultado
-caminho_saida = r"M:\\NTA2\\LMD\Evento Lean\\Dados e Documentos Gerais JBMC1\\vscode\\work_sheets\\m.csv"
+caminho_saida = r"C:\Users\santosgu\OneDrive - American Axle & Manufacturing, Inc\Dados JBMC\\m.csv"
 df.write_csv(caminho_saida, separator=";")
 
 print("Sucesso! O arquivo foi processado ignorando o erro de codificação.")
