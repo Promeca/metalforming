@@ -1,7 +1,7 @@
 import polars as pl
 
 # 1. Caminho completo
-caminho_entrada = r"M:\\NTA2\\LMD\Evento Lean\\Dados e Documentos Gerais JBMC1\\vscode\\work_sheets\\s.csv"
+caminho_entrada = r"C:\Users\santosgu\OneDrive - American Axle & Manufacturing, Inc\Dados JBMC\\s.csv"
 
 # 2. Lendo com latin1 para aceitar cedilha e acentos
 df = pl.read_csv(
